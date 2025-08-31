@@ -61,7 +61,7 @@ DB_MCP/
 
 1. **Clone the repository**
 ```bash
-git clone <repository-url>
+git clone https://github.com/tleeds1/DB_MultiAgent
 cd DB_MCP
 ```
 
