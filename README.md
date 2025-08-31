@@ -62,7 +62,7 @@ DB_MCP/
 1. **Clone the repository**
 ```bash
 git clone https://github.com/tleeds1/DB_MultiAgent
-cd DB_MCP
+cd DB_MultiAgent
 ```
 
 2. **Install dependencies**
