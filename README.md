@@ -199,7 +199,7 @@ SELECT 'Jane Smith', addressid FROM new_address;
 - **Schema Evolution** - Handle schema changes automatically
 - **Natural Language Training** - Improve query understanding over time
 
-## 🧪 **Testing**
+## 🧪 **Testing (IN PLAN)**
 
 ```bash
 # Run tests (when implemented)
