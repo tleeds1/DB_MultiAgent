@@ -1,4 +1,3 @@
 .env
-server.py
 test_notification.py
 cache.py
