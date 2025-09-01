@@ -5,15 +5,17 @@ SQL generation agent using LLM
 import re
 import json
 from typing import Dict, Any, List
+import requests
 from ..database.models import DatabaseSchema
 
 
 class SQLGenerationAgent:
     """Generate SQL using schema understanding and context"""
     
-    def __init__(self, llm_client, model_config: Dict[str, str]):
+    def __init__(self, llm_client, model_config: Dict[str, str], llm_monitor=None):
         self.llm_client = llm_client
         self.model_config = model_config
+        self.llm_monitor = llm_monitor
     
     def generate_sql(self, question: str, context: Dict[str, Any], 
                      schema: DatabaseSchema, db_type: str) -> str:
@@ -64,24 +66,53 @@ class SQLGenerationAgent:
         """
         
         try:
-            response = self.llm_client.models.generate_content(
-                model=self.model_config['primary'],
-                contents=prompt
-            )
-            
-            # Extract SQL
-            sql_match = re.search(r'```sql\n(.*?)\n```', response.text, re.DOTALL)
-            if sql_match:
-                sql = sql_match.group(1).strip()
+            # Use LLM monitor to call appropriate model with fallback (Gemini → Llama/Ollama)
+            if self.llm_monitor:
+                wrapped = self.llm_monitor.monitor_call(self._generate_with_model)
+                text = wrapped(prompt=prompt)
             else:
-                sql = response.text.strip()
-            
-            return sql
-            
+                # Fallback: direct Gemini call
+                text = self._generate_with_model(prompt=prompt, model_name=self.model_config.get('primary'))
+
+            sql_match = re.search(r'```sql\n(.*?)\n```', text, re.DOTALL)
+            if sql_match:
+                return sql_match.group(1).strip()
+            return text.strip()
         except Exception as e:
             print(f"SQL generation error: {e}")
             # Fallback to simple query generation
             return self._generate_fallback_sql(question, context, schema)
+
+    def _generate_with_model(self, *, prompt: str, model_name: str = None) -> str:
+        """Generate text using the specified model (Gemini or Ollama Llama)."""
+        model = model_name or (self.llm_monitor.get_current_model() if self.llm_monitor else self.model_config.get('primary'))
+        if not model:
+            raise ValueError("No model configured")
+
+        # Gemini backend
+        if 'gemini' in model:
+            resp = self.llm_client.models.generate_content(model=model, contents=prompt)
+            return getattr(resp, 'text', str(resp))
+
+        # Assume Ollama backend for Llama-like models
+        base_url = None
+        if self.llm_monitor and model in self.llm_monitor.models:
+            base_url = self.llm_monitor.models[model].base_url
+        if not base_url:
+            base_url = 'http://localhost:11434'
+
+        try:
+            r = requests.post(f"{base_url}/api/generate", json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False
+            }, timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            # Ollama returns {'response': '...'}
+            return data.get('response', '')
+        except Exception as e:
+            raise RuntimeError(f"Ollama generation failed: {e}")
     
     def _create_schema_description(self, schema: DatabaseSchema, context: Dict) -> str:
         """Create focused schema description based on context"""

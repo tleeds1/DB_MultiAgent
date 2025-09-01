@@ -368,7 +368,7 @@ class ConversationAgent:
         
         return current_question
     
-    def get_smart_suggestions(self, session_id: str, current_context: Dict[str, Any]) -> List[str]:
+    def get_smart_suggestions(self, session_id: str, current_context: Dict[str, Any] = None) -> List[str]:
         """Get smart suggestions based on conversation history and current context"""
         if session_id not in self.conversations:
             return []
@@ -408,6 +408,39 @@ class ConversationAgent:
             suggestions.append("Bạn có muốn tôi tạo báo cáo tổng hợp từ nhiều bảng không?")
         
         return suggestions[:3]
+    
+    def get_conversation_context(self, session_id: str) -> Dict[str, Any]:
+        """Get conversation context for follow-up question processing"""
+        if session_id not in self.conversations:
+            return {}
+        
+        conversation = self.conversations[session_id]
+        if not conversation.turns:
+            return {}
+        
+        # Get last turn information
+        last_turn = conversation.turns[-1]
+        
+        # Get last suggestion if available
+        last_suggestion = None
+        if hasattr(last_turn, 'suggestions') and last_turn.suggestions:
+            last_suggestion = last_turn.suggestions[0] if last_turn.suggestions else None
+        
+        # Get context from last successful query
+        last_context = {}
+        if last_turn.success and hasattr(last_turn, 'context'):
+            last_context = last_turn.context or {}
+        
+        return {
+            'last_question': last_turn.user_input,
+            'last_suggestion': last_suggestion,
+            'last_response': last_turn.response,
+            'mentioned_tables': conversation.mentioned_tables,
+            'mentioned_columns': conversation.mentioned_columns,
+            'current_topic': conversation.current_topic,
+            'last_context': last_context,
+            'total_turns': len(conversation.turns)
+        }
     
     def clear_conversation(self, session_id: str):
         """Clear conversation history"""

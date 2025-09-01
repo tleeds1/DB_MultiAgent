@@ -83,7 +83,7 @@ class EnhancedDatabaseAgentSystem:
         
         # Initialize agents
         self.context_agent = ContextAgent()
-        self.sql_generation_agent = SQLGenerationAgent(self.llm_client, self.model_config)
+        self.sql_generation_agent = SQLGenerationAgent(self.llm_client, self.model_config, llm_monitor=self.llm_monitor)
         self.execution_agent = ExecutionAgent()
         self.planning_agent = PlanningAgent()
         self.verification_agent = VerificationAgent()
@@ -417,7 +417,7 @@ class EnhancedDatabaseAgentSystem:
         return " ".join(sql_parts)
     
     def process_query(self, question: str, session_id: str = "default") -> str:
-        """Main query processing pipeline"""
+        """Main query processing pipeline with follow-up question handling"""
         print(f"\n🔍 Processing: {question}")
         start_time = time.time()
         
@@ -429,13 +429,22 @@ class EnhancedDatabaseAgentSystem:
             # Analyze schema
             schema = self.analyze_database_smart()
             
-            # Context analysis with schema awareness
-            context = self.enhanced_context_agent(question, schema)
-            # Include conversation context into prompt creation later
-            context_prompt = self.conversation_agent.generate_context_prompt(session_id, question)
-            print(f"📊 Context: {context['complexity']} query, {len(context['mentioned_tables'])} tables")
+            # Check if this is a follow-up question
+            is_follow_up, processed_question, follow_up_context = self._analyze_follow_up_question(
+                session_id, question, schema
+            )
             
-            # Debug: print context structure
+            if is_follow_up:
+                print(f"🔄 Follow-up detected: '{question}' → '{processed_question}'")
+                question = processed_question
+                # Merge follow-up context with new context
+                context = self.enhanced_context_agent(question, schema)
+                context.update(follow_up_context)
+            else:
+                # Regular new question
+                context = self.enhanced_context_agent(question, schema)
+            
+            print(f"📊 Context: {context['complexity']} query, {len(context['mentioned_tables'])} tables")
             print(f"🔍 Debug - Context keys: {list(context.keys())}")
             
             # Create a high-level plan (function-calling style)
@@ -443,7 +452,8 @@ class EnhancedDatabaseAgentSystem:
             if plan.requires_optimization:
                 plan = self.planning_agent.optimize_plan(plan, schema)
             
-            # Generate SQL (optionally from plan as a fallback)
+            # Generate SQL with enhanced context
+            context_prompt = self.conversation_agent.generate_context_prompt(session_id, question)
             sql = self.intelligent_sql_generation(context_prompt, context, schema)
             if not sql:
                 sql = self.planning_agent.generate_sql_from_plan(plan)
@@ -513,6 +523,61 @@ class EnhancedDatabaseAgentSystem:
                                      {'error': str(e)}, "ERROR")
             
             return error_msg
+
+    def _analyze_follow_up_question(self, session_id: str, question: str, schema: DatabaseSchema) -> Tuple[bool, str, Dict]:
+        """Analyze if question is a follow-up and process accordingly"""
+        # Simple follow-up detection
+        follow_up_indicators = ['có', 'yes', 'ok', 'được', 'tiếp', 'more', 'thêm', 'and', 'và', 'okay']
+        clarification_indicators = ['gì', 'what', 'nào', 'which', 'sao', 'why', 'tại sao']
+        
+        question_lower = question.lower().strip()
+        
+        # Check if it's a simple affirmation/continuation
+        if question_lower in follow_up_indicators:
+            # Get previous conversation context
+            prev_context = self.conversation_agent.get_conversation_context(session_id)
+            if prev_context and prev_context.get('last_suggestion'):
+                # Continue with the previous suggestion
+                suggestion = prev_context['last_suggestion']
+                if 'phân tích hành vi khách hàng' in suggestion.lower():
+                    processed_question = "Phân tích hành vi khách hàng dựa trên kết quả tìm được trước đó"
+                    follow_up_context = {
+                        'mentioned_tables': prev_context.get('mentioned_tables', []),
+                        'requires_join': True,
+                        'requires_aggregation': True,
+                        'complexity': 'medium'
+                    }
+                    return True, processed_question, follow_up_context
+                elif 'tìm kiếm' in suggestion.lower():
+                    processed_question = "Tìm kiếm chi tiết hơn về kết quả trước đó"
+                    follow_up_context = {
+                        'mentioned_tables': prev_context.get('mentioned_tables', []),
+                        'requires_join': True,
+                        'complexity': 'medium'
+                    }
+                    return True, processed_question, follow_up_context
+                else:
+                    # Generic continuation
+                    processed_question = f"Tiếp tục phân tích: {prev_context.get('last_question', 'kết quả trước đó')}"
+                    follow_up_context = {
+                        'mentioned_tables': prev_context.get('mentioned_tables', []),
+                        'complexity': 'medium'
+                    }
+                    return True, processed_question, follow_up_context
+        
+        # Check if it's asking for clarification
+        elif any(indicator in question_lower for indicator in clarification_indicators):
+            prev_context = self.conversation_agent.get_conversation_context(session_id)
+            if prev_context:
+                processed_question = f"Làm rõ thêm về: {prev_context.get('last_question', 'câu hỏi trước đó')}"
+                follow_up_context = {
+                    'mentioned_tables': prev_context.get('mentioned_tables', []),
+                    'complexity': 'simple'
+                }
+                return True, processed_question, follow_up_context
+        
+        # Not a follow-up question
+        return False, question, {}
     
     def _fix_sql_errors(self, sql: str, error: str, schema: DatabaseSchema) -> str:
         """Attempt to fix SQL errors using LLM"""
