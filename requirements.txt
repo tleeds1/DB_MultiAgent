@@ -20,6 +20,13 @@ requests>=2.31.0
 dataclasses  # Built-in with Python 3.7+
 typing-extensions>=4.0.0
 
+# LLM monitoring and open-source fallback
+transformers>=4.41.0
+torch>=2.2.0; platform_system!="Windows" or platform_machine!="x86_64" # adjust as needed
+
+# Twilio for WhatsApp integration
+twilio>=8.0.0
+
 # Development dependencies (optional)
 # pytest>=7.0.0
 # black>=23.0.0

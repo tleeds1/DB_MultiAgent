@@ -24,6 +24,12 @@ class NotificationManager:
             },
             'slack': {
                 'webhook': os.getenv('SLACK_WEBHOOK')
+            },
+            'whatsapp': {
+                'account_sid': os.getenv('TWILIO_ACCOUNT_SID'),
+                'auth_token': os.getenv('TWILIO_AUTH_TOKEN'),
+                'from_number': os.getenv('TWILIO_WHATSAPP_FROM'),
+                'to_number': os.getenv('TWILIO_WHATSAPP_TO')
             }
         }
     
@@ -35,9 +41,11 @@ class NotificationManager:
                 return self._send_telegram(message, notification_type)
             elif channel == 'slack':
                 return self._send_slack(message, notification_type)
+            elif channel == 'whatsapp':
+                return self._send_whatsapp(message)
             elif channel == 'all':
                 success = True
-                for ch in ['telegram', 'slack']:
+                for ch in ['telegram', 'slack', 'whatsapp']:
                     if not self._send_to_channel(message, ch, notification_type):
                         success = False
                 return success
@@ -54,6 +62,8 @@ class NotificationManager:
             return self._send_telegram(message, notification_type)
         elif channel == 'slack':
             return self._send_slack(message, notification_type)
+        elif channel == 'whatsapp':
+            return self._send_whatsapp(message)
         return False
     
     def _send_telegram(self, message: str, notification_type: str = "INFO") -> bool:
@@ -146,6 +156,25 @@ class NotificationManager:
             return True
         except Exception as e:
             print(f"Slack notification error: {e}")
+            return False
+
+    def _send_whatsapp(self, message: str) -> bool:
+        """Send WhatsApp message via Twilio API"""
+        cfg = self.channels['whatsapp']
+        if not all([cfg.get('account_sid'), cfg.get('auth_token'), cfg.get('from_number'), cfg.get('to_number')]):
+            # Config missing; silently skip
+            return False
+        try:
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{cfg['account_sid']}/Messages.json"
+            data = {
+                'From': f"whatsapp:{cfg['from_number']}",
+                'To': f"whatsapp:{cfg['to_number']}",
+                'Body': message[:1590]  # WhatsApp body limit safety
+            }
+            resp = requests.post(url, data=data, auth=(cfg['account_sid'], cfg['auth_token']), timeout=10)
+            return resp.status_code in (200, 201)
+        except Exception as e:
+            print(f"WhatsApp notification error: {e}")
             return False
     
     def _escape_telegram_markdown(self, text: str) -> str:

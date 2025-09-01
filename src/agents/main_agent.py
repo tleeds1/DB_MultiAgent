@@ -16,10 +16,14 @@ from ..database import DatabaseFactory, DatabaseAdapter
 from ..database.models import DatabaseSchema
 from ..utils.query_optimizer import QueryOptimizer
 from ..utils.notification import NotificationManager
+from ..utils.llm_monitor import LLMMonitor
 from ..utils.schema_analyzer import SchemaAnalyzer
 from .context_agent import ContextAgent
 from .sql_generation_agent import SQLGenerationAgent
 from .execution_agent import ExecutionAgent
+from .planning_agent import PlanningAgent
+from .verification_agent import VerificationAgent
+from .conversation_agent import ConversationAgent, ConversationType
 
 # Load environment variables
 load_dotenv()
@@ -75,11 +79,15 @@ class EnhancedDatabaseAgentSystem:
         self.query_optimizer = QueryOptimizer()
         self.notification_manager = NotificationManager()
         self.schema_analyzer = SchemaAnalyzer()
+        self.llm_monitor = LLMMonitor()
         
         # Initialize agents
         self.context_agent = ContextAgent()
         self.sql_generation_agent = SQLGenerationAgent(self.llm_client, self.model_config)
         self.execution_agent = ExecutionAgent()
+        self.planning_agent = PlanningAgent()
+        self.verification_agent = VerificationAgent()
+        self.conversation_agent = ConversationAgent(max_history=self.max_context_length)
         
         # Query count for monitoring
         self.query_count = 0
@@ -408,7 +416,7 @@ class EnhancedDatabaseAgentSystem:
         
         return " ".join(sql_parts)
     
-    def process_query(self, question: str) -> str:
+    def process_query(self, question: str, session_id: str = "default") -> str:
         """Main query processing pipeline"""
         print(f"\n🔍 Processing: {question}")
         start_time = time.time()
@@ -423,22 +431,36 @@ class EnhancedDatabaseAgentSystem:
             
             # Context analysis with schema awareness
             context = self.enhanced_context_agent(question, schema)
+            # Include conversation context into prompt creation later
+            context_prompt = self.conversation_agent.generate_context_prompt(session_id, question)
             print(f"📊 Context: {context['complexity']} query, {len(context['mentioned_tables'])} tables")
             
             # Debug: print context structure
             print(f"🔍 Debug - Context keys: {list(context.keys())}")
             
-            # Generate SQL
-            sql = self.intelligent_sql_generation(question, context, schema)
+            # Create a high-level plan (function-calling style)
+            plan = self.planning_agent.create_query_plan(question, context, schema)
+            if plan.requires_optimization:
+                plan = self.planning_agent.optimize_plan(plan, schema)
+            
+            # Generate SQL (optionally from plan as a fallback)
+            sql = self.intelligent_sql_generation(context_prompt, context, schema)
+            if not sql:
+                sql = self.planning_agent.generate_sql_from_plan(plan)
             print(f"✨ Generated SQL: {sql[:100]}...")
             
-            # Validate SQL
-            is_valid, error = self.current_adapter.validate_sql(sql)
-            if not is_valid:
-                print(f"⚠️ SQL validation failed: {error}")
-                # Try to fix and regenerate
+            # Feedback loop: validate -> fix/regenerate -> re-validate (max 3 attempts)
+            attempts = 0
+            while attempts < 3:
+                attempts += 1
+                is_valid, error = self.current_adapter.validate_sql(sql)
+                if is_valid:
+                    break
+                print(f"⚠️ SQL validation failed (attempt {attempts}): {error}")
                 sql = self._fix_sql_errors(sql, error, schema)
-            
+                if attempts == 3:
+                    print("⚠️ Max attempts reached, proceeding with last SQL")
+
             # Execute query
             result, error = self.current_adapter.execute_query(sql)
             
@@ -447,12 +469,37 @@ class EnhancedDatabaseAgentSystem:
             
             # Format response
             response = self._format_response(result, question, context)
+
+            # Verification step against business rules
+            validations = self.verification_agent.verify_query_result(result, question, context, schema)
+            summary = self.verification_agent.get_validation_summary(validations)
+            suggestions = self.verification_agent.suggest_improvements(validations)
             
-            # Send Telegram report
-            self._send_telegram_report(question, sql, result, time.time() - start_time, context)
+            # Send reports to channels
+            exec_time = time.time() - start_time
+            self._send_telegram_report(question, sql, result, exec_time, {**context, 'validation': summary})
+            # Also send Slack if configured
+            try:
+                note = self.notification_manager.create_structured_notification(
+                    question=question, sql=sql, results=result, execution_time=exec_time, context=context
+                )
+                self.notification_manager.send_notification(note, channel='slack', notification_type='SUCCESS')
+            except Exception:
+                pass
             
             # Update context history
-            self._update_context_history(question, sql, context, time.time() - start_time, True)
+            self._update_context_history(question, sql, context, exec_time, True)
+            # Conversation turn with suggestions
+            self.conversation_agent.add_turn(
+                session_id=session_id,
+                user_input=question,
+                response=response,
+                context={**context, 'row_count': result.get('row_count', 0), 'execution_time': exec_time, 'success': True},
+                conversation_type=ConversationType.QUERY,
+                sql_generated=sql,
+                execution_time=exec_time,
+                success=True
+            )
             
             print(f"✅ Completed in {time.time() - start_time:.2f}s")
             return response

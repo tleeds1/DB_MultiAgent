@@ -15,6 +15,7 @@ def main():
     """)
     
     agent = EnhancedDatabaseAgentSystem()
+    session_id = "cli-session"
     
     # Database selection
     print("\n📊 Available Database Types:")
@@ -121,11 +122,21 @@ def main():
                 print("🗑️ Context and cache cleared")
             
             else:
-                # Process natural language query
-                response = agent.process_query(user_input)
+                # Process natural language query with session
+                response = agent.process_query(user_input, session_id=session_id)
                 print("\n" + "="*60)
                 print(response)
                 print("="*60)
+                # Show smart suggestions
+                try:
+                    from ..agents.conversation_agent import ConversationAgent
+                    suggestions = agent.conversation_agent.get_smart_suggestions(session_id, {})
+                    if suggestions:
+                        print("\n🔎 Suggestions:")
+                        for s in suggestions:
+                            print(f" - {s}")
+                except Exception:
+                    pass
             
         except KeyboardInterrupt:
             print("\n\n👋 Session interrupted. Goodbye!")
